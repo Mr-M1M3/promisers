@@ -36,7 +36,10 @@ impl ThreadPool {
                                     job
                                 }
                                 Err(_) => {
-                                    println!("no tx exists");
+                                    // rx.recv() only returns error if the transmitter has already hung up
+                                    // if the transmitter has hung up, that means, no more work is coming
+                                    // so we break the loop
+                                    // now join_handle.join() will see that the thread has finished working
                                     break;
                                 }
                             };

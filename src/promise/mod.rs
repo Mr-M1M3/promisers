@@ -2,26 +2,25 @@ mod state;
 use state::PromiseState;
 use std::{cell::RefCell, rc::Rc};
 
-use crate::executor::Executor;
+use crate::keeper::Keeper;
 
 pub struct Promise<T: 'static, E: 'static> {
     state: PromiseState<T, E>,
     on_resolve: Option<Box<dyn FnOnce(T)>>,
     on_reject: Option<Box<dyn FnOnce(E)>>,
-    executor: Rc<RefCell<Executor>>,
+    keeper: Rc<RefCell<Keeper>>,
 }
 
 impl<T: 'static, E: 'static> Promise<T, E> {
     pub fn new(
-        f: Box<dyn FnOnce(Box<dyn FnOnce(T)>, Box<dyn FnOnce(E)>, Rc<RefCell<Executor>>)>,
-        executor: Rc<RefCell<Executor>>,
+        f: Box<dyn FnOnce(Box<dyn FnOnce(T)>, Box<dyn FnOnce(E)>, Rc<RefCell<Keeper>>)>,
+        keeper: Rc<RefCell<Keeper>>,
     ) -> Rc<RefCell<Self>> {
-
         let internal_promise = Rc::new(RefCell::new(Self {
             state: PromiseState::Pending,
             on_reject: None,
             on_resolve: None,
-            executor: Rc::clone(&executor),
+            keeper: Rc::clone(&keeper),
         }));
         let internal_promise_mask_1 = Rc::clone(&internal_promise);
         let internal_promise_mask_2 = Rc::clone(&internal_promise);
@@ -32,7 +31,7 @@ impl<T: 'static, E: 'static> Promise<T, E> {
             Box::new(move |err| {
                 Self::reject(internal_promise_mask_2, err);
             }),
-            Rc::clone(&executor),
+            Rc::clone(&keeper),
         );
         return internal_promise;
     }
@@ -47,8 +46,7 @@ impl<T: 'static, E: 'static> Promise<T, E> {
                 to_resolve.borrow_mut().state = PromiseState::Done;
             }
             None => {
-                to_resolve.borrow_mut().state =
-                    PromiseState::Resolved(data);
+                to_resolve.borrow_mut().state = PromiseState::Resolved(data);
             }
         }
     }
@@ -96,9 +94,11 @@ impl<T: 'static, E: 'static> Promise<T, E> {
             PromiseState::Done => self,
             // if the promise is already resolved
             PromiseState::Resolved(data) => {
-                self.executor.borrow_mut().schedule(Box::new(move || {
-                    cb(data);
-                }));
+                self.keeper
+                    .borrow_mut()
+                    .schedule_immediate(Box::new(move || {
+                        cb(data);
+                    }));
                 self.state = PromiseState::Done;
                 self
             }
@@ -116,9 +116,11 @@ impl<T: 'static, E: 'static> Promise<T, E> {
             PromiseState::Done => (),
             // if the promise is already resolved
             PromiseState::Rejected(err) => {
-                self.executor.borrow_mut().schedule(Box::new(move || {
-                    cb(err);
-                }));
+                self.keeper
+                    .borrow_mut()
+                    .schedule_immediate(Box::new(move || {
+                        cb(err);
+                    }));
                 self.state = PromiseState::Done;
             }
             // we changed state in std::mem::replace
@@ -135,8 +137,8 @@ mod test {
     use super::*;
     #[test]
     fn init() {
-        let executor = Rc::new(RefCell::new(Executor::new()));
-        let executor_mask = Rc::clone(&executor);
+        let keeper = Rc::new(RefCell::new(Keeper::with_threads(1)));
+        let keeper_mask = Rc::clone(&keeper);
         let a: Rc<RefCell<Promise<i32, i32>>> = Promise::new(
             Box::new(|acc, _, e| {
                 acc(10);
@@ -154,12 +156,11 @@ mod test {
                     println!("errors works too, {}", err);
                 }));
             }),
-            executor_mask,
+            keeper_mask,
         );
         a.borrow_mut().then(Box::new(|data| {
             println!("LOl, it worked  😐, {}", data);
         }));
-
-        Executor::run(executor);
+        keeper.borrow_mut().keep();
     }
 }
