@@ -22,6 +22,7 @@ pub struct Keeper {
     // and store it here to keep the wakers alive
     waker_map: HashMap<Token, Arc<Waker>>,
     threadpool: ThreadPool,
+    latest_waker_id: usize,
 }
 
 impl Keeper {
@@ -35,6 +36,7 @@ impl Keeper {
             callback_map: HashMap::new(),
             waker_map: HashMap::new(),
             threadpool: ThreadPool::with_threads(thread_count),
+            latest_waker_id: 0,
         }
     }
     pub fn threadpool(&self) -> &ThreadPool {
@@ -54,11 +56,9 @@ impl Keeper {
             .register(registry.fd, registry.id, registry.interest)
     }
 
-    pub(crate) fn reg_waker(
-        &mut self,
-        id: usize,
-        cb: Box<dyn FnOnce()>,
-    ) -> Result<Arc<Waker>, IoError> {
+    pub(crate) fn reg_waker(&mut self, cb: Box<dyn FnOnce()>) -> Result<Arc<Waker>, IoError> {
+        let id = self.latest_waker_id;
+        self.latest_waker_id += 1;
         let token = Token(id);
         self.callback_map.insert(token, cb);
         match Waker::new(self.poller.registry(), token) {
