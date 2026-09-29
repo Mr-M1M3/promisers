@@ -12,10 +12,10 @@ pub struct Promise<T: 'static, E: 'static> {
 }
 
 impl<T: 'static, E: 'static> Promise<T, E> {
-    pub fn new(
-        f: Box<dyn FnOnce(Box<dyn FnOnce(T)>, Box<dyn FnOnce(E)>, Rc<RefCell<Keeper>>)>,
-        keeper: Rc<RefCell<Keeper>>,
-    ) -> Rc<RefCell<Self>> {
+    pub fn new<F>(f: F, keeper: Rc<RefCell<Keeper>>) -> Rc<RefCell<Self>>
+    where
+        F: FnOnce(Box<dyn FnOnce(T)>, Box<dyn FnOnce(E)>, Rc<RefCell<Keeper>>),
+    {
         let internal_promise = Rc::new(RefCell::new(Self {
             state: PromiseState::Pending,
             on_reject: None,
@@ -88,44 +88,40 @@ impl<T: 'static, E: 'static> Promise<T, E> {
             return false;
         }
     }
-    pub fn then(&mut self, cb: Box<dyn FnOnce(T)>) -> &mut Self {
+    pub fn then<F: FnOnce(T) + 'static>(&mut self, cb: F) -> &mut Self {
         match std::mem::replace(&mut self.state, PromiseState::Done) {
             // no-op is promise is done
             PromiseState::Done => self,
             // if the promise is already resolved
             PromiseState::Resolved(data) => {
-                self.keeper
-                    .borrow_mut()
-                    .schedule_immediate(Box::new(move || {
-                        cb(data);
-                    }));
+                self.keeper.borrow_mut().schedule_immediate(move || {
+                    cb(data);
+                });
                 self.state = PromiseState::Done;
                 self
             }
             // we changed state in std::mem::replace
             state => {
-                self.on_resolve = Some(cb);
+                self.on_resolve = Some(Box::new(cb));
                 self.state = state;
                 self
             }
         }
     }
-    pub fn catch(&mut self, cb: Box<dyn FnOnce(E)>) {
+    pub fn catch<F: FnOnce(E) + 'static>(&mut self, cb: F) {
         match std::mem::replace(&mut self.state, PromiseState::Done) {
             // no-op is promise is done
             PromiseState::Done => (),
             // if the promise is already resolved
             PromiseState::Rejected(err) => {
-                self.keeper
-                    .borrow_mut()
-                    .schedule_immediate(Box::new(move || {
-                        cb(err);
-                    }));
+                self.keeper.borrow_mut().schedule_immediate(move || {
+                    cb(err);
+                });
                 self.state = PromiseState::Done;
             }
             // we changed state in std::mem::replace
             state => {
-                self.on_reject = Some(cb);
+                self.on_reject = Some(Box::new(cb));
                 self.state = state;
             }
         }
@@ -140,27 +136,27 @@ mod test {
         let keeper = Rc::new(RefCell::new(Keeper::with_threads(1)));
         let keeper_mask = Rc::clone(&keeper);
         let a: Rc<RefCell<Promise<i32, i32>>> = Promise::new(
-            Box::new(|acc, _, e| {
+            |acc, _, e| {
                 acc(10);
                 Promise::new(
-                    Box::new(|_, rej, _| {
+                    |_, rej, _| {
                         rej(300);
-                    }),
+                    },
                     e,
                 )
                 .borrow_mut()
-                .then(Box::new(|data: i32| {
+                .then(|data: i32| {
                     println!("it worked too, {}", data);
-                }))
-                .catch(Box::new(|err| {
+                })
+                .catch(|err| {
                     println!("errors works too, {}", err);
-                }));
-            }),
+                });
+            },
             keeper_mask,
         );
-        a.borrow_mut().then(Box::new(|data| {
+        a.borrow_mut().then(|data| {
             println!("LOl, it worked  😐, {}", data);
-        }));
+        });
         keeper.borrow_mut().keep();
     }
 }

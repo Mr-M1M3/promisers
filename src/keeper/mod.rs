@@ -42,25 +42,28 @@ impl Keeper {
     pub fn threadpool(&self) -> &ThreadPool {
         &self.threadpool
     }
-    pub fn schedule_immediate(&mut self, f: Box<dyn FnOnce()>) {
-        self.immediately_execute.push_back(f);
+    pub fn schedule_immediate<F: FnOnce() + 'static>(&mut self, cb: F) {
+        self.immediately_execute.push_back(Box::new(cb));
     }
-    pub fn register<'a, T: Source + ?Sized>(
+    pub fn register<'a, T: Source + ?Sized, F: FnOnce() + 'static>(
         &mut self,
         registry: registry::Registry<T>,
-        cb: Box<dyn FnOnce()>,
+        cb: F,
     ) -> Result<(), IoError> {
-        self.callback_map.insert(registry.id, cb);
+        self.callback_map.insert(registry.id, Box::new(cb));
         self.poller
             .registry()
             .register(registry.fd, registry.id, registry.interest)
     }
 
-    pub(crate) fn reg_waker(&mut self, cb: Box<dyn FnOnce()>) -> Result<Arc<Waker>, IoError> {
+    pub(crate) fn reg_waker<F: FnOnce() + 'static>(
+        &mut self,
+        cb: F,
+    ) -> Result<Arc<Waker>, IoError> {
         let id = self.latest_waker_id;
         self.latest_waker_id += 1;
         let token = Token(id);
-        self.callback_map.insert(token, cb);
+        self.callback_map.insert(token, Box::new(cb));
         match Waker::new(self.poller.registry(), token) {
             Ok(waker) => {
                 let waker = Arc::new(waker);
